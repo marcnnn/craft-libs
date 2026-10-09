@@ -1,0 +1,14 @@
+[package]
+name = "craft-audio-dsp"
+description = "Unified real-time audio DSP for Craft Apps: biquads, EQ, dynamics, loudness metering, panning, reverb, modulation, and resampling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# Dependency-free core: operates on planar and interleaved f32 slices
+[dependencies]
