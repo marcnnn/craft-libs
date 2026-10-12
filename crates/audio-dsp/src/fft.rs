@@ -55,10 +55,14 @@ impl Sub for Complex {
 }
 
 /// Compute in-place Radix-2 FFT. `buffer.len()` must be a power of two.
-pub fn fft_in_place(buffer: &mut [Complex]) {
+///
+/// Returns `true` when the transform was applied. A zero-length or non-power-of-two
+/// buffer is left **untouched** and `false` is returned (this crate never panics, so an
+/// unsupported length is reported rather than asserted).
+pub fn fft_in_place(buffer: &mut [Complex]) -> bool {
     let n = buffer.len();
-    if n <= 1 {
-        return;
+    if n == 0 || !n.is_power_of_two() {
+        return false;
     }
 
     // Bit reversal permutation
@@ -96,13 +100,19 @@ pub fn fft_in_place(buffer: &mut [Complex]) {
         }
         len <<= 1;
     }
+    true
 }
 
-/// Compute in-place Radix-2 Inverse FFT (normalized by 1/N).
-pub fn ifft_in_place(buffer: &mut [Complex]) {
+/// Compute in-place Radix-2 Inverse FFT (normalized by 1/N). `buffer.len()` must be a
+/// power of two. Returns `false` (buffer untouched) for unsupported lengths; see
+/// [`fft_in_place`].
+pub fn ifft_in_place(buffer: &mut [Complex]) -> bool {
     let n = buffer.len();
-    if n <= 1 {
-        return;
+    if n == 0 || !n.is_power_of_two() {
+        return false;
+    }
+    if n == 1 {
+        return true;
     }
 
     // Conjugate inputs
@@ -119,6 +129,7 @@ pub fn ifft_in_place(buffer: &mut [Complex]) {
         c.re *= scale;
         c.im = -c.im * scale;
     }
+    true
 }
 
 /// Generate a Hann window of length `n`.

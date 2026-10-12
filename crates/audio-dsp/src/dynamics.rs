@@ -1,7 +1,14 @@
-//! Dynamics processing: compressor, look-ahead limiter, and noise gate.
+//! Dynamics processing: compressor, look-ahead mastering limiter, zero-latency
+//! protection limiter, and noise gate.
 //!
-//! Gain computers operate in the decibel domain with quadratic soft knee interpolation.
-//! Detector envelopes are stereo-linked to prevent stereo image shifting.
+//! Two distinct limiter jobs, deliberately not one type:
+//! - [`MasteringLimiter`] adds look-ahead latency to reduce gain *smoothly* — a studio /
+//!   mastering / playout tool. Its look-ahead is real latency: report
+//!   [`MasteringLimiter::latency_samples`] and account for it in the latency chain.
+//! - [`ProtectionLimiter`] is the monitoring / live-mixer kind: **zero look-ahead, zero
+//!   added latency**. Instant attack on the very sample that exceeds the ceiling,
+//!   smoothed release, hard-clamped output. A monitor path must never pay latency for
+//!   limiting.
 
 use crate::util::{db_to_gain, flush, gain_to_db, time_coef};
 
@@ -137,9 +144,15 @@ impl Compressor {
     }
 }
 
-/// Look-ahead brickwall peak limiter.
+/// Look-ahead brickwall peak limiter for mastering, playout and offline rendering.
+///
+/// The peak detector runs on the input while the audio waits in a delay line, so the gain
+/// envelope can reach its reduction before the peak emerges — smooth, transparent gain
+/// changes at the cost of `lookahead_ms` of latency on every sample (query it with
+/// [`latency_samples`](MasteringLimiter::latency_samples) and announce it in the latency
+/// chain). For monitoring and live paths use [`ProtectionLimiter`] instead: no look-ahead.
 #[derive(Debug, Clone)]
-pub struct Limiter {
+pub struct MasteringLimiter {
     ceiling_db: f32,
     ceiling_linear: f32,
     rel_coef: f32,
@@ -150,7 +163,7 @@ pub struct Limiter {
     lookahead_samples: usize,
 }
 
-impl Limiter {
+impl MasteringLimiter {
     /// Create a look-ahead limiter with ceiling in dB (e.g. -0.1 dB),
     /// lookahead in milliseconds (e.g. 5.0 ms), and release in milliseconds (e.g. 50.0 ms).
     pub fn new(ceiling_db: f32, lookahead_ms: f32, release_ms: f32, sample_rate: f32) -> Self {
@@ -214,6 +227,69 @@ impl Limiter {
 
         *left = (out_l * self.envelope).clamp(-self.ceiling_linear, self.ceiling_linear);
         *right = (out_r * self.envelope).clamp(-self.ceiling_linear, self.ceiling_linear);
+
+        gain_to_db(self.envelope)
+    }
+}
+
+/// Zero-look-ahead brickwall limiter for monitoring and live mixing.
+///
+/// This is the live-console kind of limiter: **no look-ahead, no delay line, zero added
+/// latency**. Attack is instant — the gain drops on the very sample that exceeds the
+/// ceiling — the release is smoothed, and the output is hard-clamped to the ceiling as
+/// the final guarantee (speaker and ear protection). The instant gain step is the
+/// accepted trade-off for spending no latency on limiting; for smooth, transparent gain
+/// reduction in studio, mastering or playout paths use [`MasteringLimiter`].
+#[derive(Debug, Clone)]
+pub struct ProtectionLimiter {
+    ceiling_db: f32,
+    ceiling_linear: f32,
+    rel_coef: f32,
+    envelope: f32,
+}
+
+impl ProtectionLimiter {
+    /// Create a protection limiter with ceiling in dB (e.g. -1.0 dB) and release in
+    /// milliseconds (e.g. 50.0 ms). There is no attack time and no look-ahead.
+    pub fn new(ceiling_db: f32, release_ms: f32, sample_rate: f32) -> Self {
+        Self { ceiling_db, ceiling_linear: db_to_gain(ceiling_db.min(0.0)), rel_coef: time_coef(release_ms, sample_rate), envelope: 1.0 }
+    }
+
+    /// Reset the envelope to unity gain.
+    pub fn reset(&mut self) {
+        self.envelope = 1.0;
+    }
+
+    /// Ceiling level in decibels.
+    pub fn ceiling_db(&self) -> f32 {
+        self.ceiling_db
+    }
+
+    /// Always 0: this limiter adds no latency.
+    pub fn latency_samples(&self) -> usize {
+        0
+    }
+
+    /// Current gain reduction in decibels (0.0 when idle).
+    pub fn gain_reduction_db(&self) -> f32 {
+        gain_to_db(self.envelope)
+    }
+
+    /// Process a stereo frame. The output never exceeds the ceiling.
+    #[inline]
+    pub fn process_stereo(&mut self, left: &mut f32, right: &mut f32) -> f32 {
+        let peak = left.abs().max(right.abs());
+        let required_gain = if peak > self.ceiling_linear { self.ceiling_linear / peak } else { 1.0 };
+
+        // Instant attack, smoothed release
+        if required_gain < self.envelope {
+            self.envelope = required_gain;
+        } else {
+            self.envelope = flush(required_gain + (self.envelope - required_gain) * self.rel_coef);
+        }
+
+        *left = (*left * self.envelope).clamp(-self.ceiling_linear, self.ceiling_linear);
+        *right = (*right * self.envelope).clamp(-self.ceiling_linear, self.ceiling_linear);
 
         gain_to_db(self.envelope)
     }
