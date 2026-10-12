@@ -11,7 +11,9 @@ repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
+craft-aes67 = { path = "crates/aes67" }
 craft-atomic = { path = "crates/atomic" }
+craft-audio-clock = { path = "crates/audio-clock" }
 craft-audio-dsp = { path = "crates/audio-dsp" }
 craft-cms = { path = "crates/cms" }
 craft-print = { path = "crates/print" }
