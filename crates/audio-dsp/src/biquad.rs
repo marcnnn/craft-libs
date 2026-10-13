@@ -119,19 +119,26 @@ impl Coeffs {
     }
 
     /// Compute the complex magnitude response in decibels at a given frequency.
+    ///
+    /// Evaluates H(e^jw) exactly (real and imaginary parts of numerator and
+    /// denominator) rather than a polynomial shortcut, so deep notches report
+    /// their true attenuation instead of a flat 0 dB. Non-finite `freq_hz`
+    /// reads as DC. The response is floored at −300 dB.
     pub fn magnitude_db(&self, freq_hz: f32, sample_rate: f32) -> f32 {
         let sr = f64::from(sane_sr(sample_rate));
-        let w = 2.0 * PI * f64::from(freq_hz) / sr;
-        let phi = 4.0 * (w * 0.5).sin().powi(2);
-        let b0 = f64::from(self.b0);
-        let b1 = f64::from(self.b1);
-        let b2 = f64::from(self.b2);
-        let a1 = f64::from(self.a1);
-        let a2 = f64::from(self.a2);
-
-        let num = (b0 + b1 + b2).powi(2) + (b0 * b2 * phi - (b1 * (b0 + b2) + 4.0 * b0 * b2)) * phi;
-        let den = (1.0 + a1 + a2).powi(2) + (a2 * phi - (a1 * (1.0 + a2) + 4.0 * a2)) * phi;
-        if den <= 1e-12 || num <= 1e-12 { 0.0 } else { (10.0 * (num / den).log10()) as f32 }
+        let f = if freq_hz.is_finite() { f64::from(freq_hz).clamp(0.0, sr * 0.5) } else { 0.0 };
+        let w = 2.0 * PI * f / sr;
+        let (s1, c1) = w.sin_cos();
+        let (s2, c2) = (2.0 * w).sin_cos();
+        let (b0, b1, b2, a1, a2) = (f64::from(self.b0), f64::from(self.b1), f64::from(self.b2), f64::from(self.a1), f64::from(self.a2));
+        let nr = b0 + b1 * c1 + b2 * c2;
+        let ni = -(b1 * s1 + b2 * s2);
+        let dr = 1.0 + a1 * c1 + a2 * c2;
+        let di = -(a1 * s1 + a2 * s2);
+        let num = nr * nr + ni * ni;
+        let den = (dr * dr + di * di).max(1e-30);
+        let db = 10.0 * (num / den).max(1e-30).log10();
+        db.max(-300.0) as f32
     }
 }
 

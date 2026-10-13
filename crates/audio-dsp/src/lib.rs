@@ -64,6 +64,27 @@ mod tests {
     }
 
     #[test]
+    fn test_biquad_magnitude_notch_depth() {
+        // A notch at its center frequency must report deep attenuation, not a
+        // flat 0 dB (the exact complex response, floored at -300 dB).
+        let coeffs = Coeffs::design(FilterType::Notch, 1000.0, 8.0, 0.0, 48000.0);
+        let at_center = coeffs.magnitude_db(1000.0, 48000.0);
+        assert!(at_center < -60.0, "notch center reads {at_center} dB, expected deep");
+        // Away from the notch the response is flat again.
+        assert!(coeffs.magnitude_db(100.0, 48000.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_biquad_magnitude_hostile_frequency() {
+        let coeffs = Coeffs::design(FilterType::Peak, 1000.0, 1.0, 6.0, 48000.0);
+        // Non-finite frequency reads as DC instead of poisoning the result.
+        assert!(coeffs.magnitude_db(f32::NAN, 48000.0).is_finite());
+        assert!(coeffs.magnitude_db(f32::NEG_INFINITY, 0.0).is_finite());
+        // Nyquist and beyond stay finite too.
+        assert!(coeffs.magnitude_db(30_000.0, 48000.0).is_finite());
+    }
+
+    #[test]
     fn test_compressor_soft_knee() {
         // Below threshold: no reduction
         let gr_under = compressor_gain_reduction(-30.0, -20.0, 4.0, 6.0);
